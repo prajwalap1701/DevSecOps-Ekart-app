@@ -1,0 +1,113 @@
+pipeline {
+    agent any
+    tools {
+        maven 'maven3'
+        jdk 'jdk17'
+    }
+    environment {
+        SCANNER_HOME= tool 'sonar-scanner'
+    }
+
+    stages {
+        stage('Git Checkout') {
+            steps {
+                git 'https://github.com/prajwalap1701/DevSecOps-Ekart-app'
+            }
+        }
+
+        stage('Compile') {
+            steps {
+                dir('ekart-java-app') {
+                    sh 'mvn compile'
+                }
+                
+            }
+        }
+        stage('Unit test') {
+            steps {
+                dir('ekart-java-app') {
+                    sh 'mvn test -DskipTests=true'
+                }
+            }
+        }
+        stage('Sonar-scanner') {
+            steps {
+                dir('ekart-java-app') {
+                    withSonarQubeEnv('sonar') {
+                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectKey=EKART \
+                    -Dsonar.projectName=EKART \
+                    -Dsonar.java.binaries=.
+                    '''
+                    }
+                }
+                
+            }
+        }
+        stage('Build') {
+            steps {
+                dir('ekart-java-app') {
+                    sh 'mvn package -DskipTests=true'
+                }
+            }
+        }
+        stage('Deploy To Nexus') {
+            steps {
+                dir('ekart-java-app') {
+                    withMaven(globalMavenSettingsConfig: 'maven-global', jdk: 'jdk17',
+                    maven: 'maven3', mavenSettingsConfig: '', traceability: true) {
+                    sh "mvn deploy -DskipTests=true"
+                    }
+                }
+                
+            }
+        }
+        stage('Docker build and tag') {
+            steps {
+                dir('ekart-java-app') {
+                    script {
+                        withDockerRegistry(credentialsId: 'docker', toolName: 'docker') {
+                            sh 'docker build -t mydocker1701/ekart:latest -f docker/Dockerfile .'
+                        }
+                    }
+                    
+                }
+            }
+        }
+        stage('Trivy scan') {
+            steps {
+                dir('ekart-java-app') {
+                    sh 'trivy image mydocker1701/ekart:latest > trivy-report.txt'
+                }
+            }
+        }
+        stage('Docker push') {
+            steps {
+                dir('ekart-java-app') {
+                    script {
+                        withDockerRegistry(credentialsId: 'docker', toolName: 'docker') {
+                            sh 'docker push mydocker1701/ekart:latest'
+                        }
+                    }
+                    
+                }
+            }
+        }
+        stage('Trivy scan') {
+            steps {
+                dir('ekart-java-app') {
+                    sh 'trivy image mydocker1701/ekart:latest > trivy-report.txt'
+                }
+            }
+        }
+        stage('Kubernetes deploy') {
+            steps {
+                dir('ekart-java-app') {
+                    withKubeConfig(caCertificate: '', clusterName: '', contextName: '', credentialsId: 'k8s-token', namespace: 'webapps', restrictKubeConfigAccess: false, serverUrl: 'https://3.223.146.179:6443') {
+                        sh 'kubectl apply -f manifests/ekart-deployment.yml'
+                        sh 'kubectl apply -f manifests/ekart-svc.yml'
+                    }
+                }
+            }
+        }
+    }
+}
